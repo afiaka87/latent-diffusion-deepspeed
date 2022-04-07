@@ -1,4 +1,3 @@
-from braceexpand import braceexpand
 import io
 import json
 import webdataset as wds
@@ -11,53 +10,34 @@ from mpi4py import MPI
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
+DATASET_SIZE = 100000
+
 def load_data(
-    *,
     data_dir,
     batch_size,
     image_size,
-    class_cond=False,
-    deterministic=False,
     random_crop=False,
     random_flip=True,
+    use_webdataset=False,
 ):
-    """
-    For a dataset, create a generator over (images, kwargs) pairs.
-
-    Each images is an NCHW float tensor, and the kwargs dict contains zero or
-    more keys, each of which map to a batched Tensor of their own.
-    The kwargs dict can be used for class labels, in which case the key is "y"
-    and the values are integer tensors of class labels.
-
-    :param data_dir: a dataset directory.
-    :param batch_size: the batch size of each returned pair.
-    :param image_size: the size to which images are resized.
-    :param class_cond: if True, include a "y" key in returned dicts for class
-                       label. If classes are not available and this is true, an
-                       exception will be raised.
-    :param deterministic: if True, yield results in a deterministic order.
-    :param random_crop: if True, randomly crop the images for augmentation.
-    :param random_flip: if True, randomly flip the images for augmentation.
-    """
-    dataset = load_webdataset(
-        resolution=image_size,
-        file_paths=data_dir,
-        classes=None,
-        shard=MPI.COMM_WORLD.Get_rank(),
-        num_shards=MPI.COMM_WORLD.Get_size(),
-        random_crop=random_crop,
-        random_flip=random_flip,
-        cache_path=None,
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=True,
-    )
+    if use_webdataset:
+        ds = load_webdataset(
+            resolution=image_size,
+            file_paths=data_dir,
+            random_crop=random_crop,
+            random_flip=random_flip,
+        )
+        dl = DataLoader(ds, batch_size=batch_size)
+    else:
+        ds = ImageDataset(
+            resolution=image_size,
+            file_paths=data_dir,
+            random_crop=random_crop,
+            random_flip=random_flip,
+        )
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
     while True:
-        yield from loader
+        yield from dl
 
 
 def _list_image_files_recursively(data_dir):
@@ -81,16 +61,12 @@ class ImageDataset(Dataset):
         self,
         resolution,
         file_paths,
-        classes=None,
-        shard=0,
-        num_shards=1,
         random_crop=False,
         random_flip=True,
     ):
         super().__init__()
         self.resolution = resolution
-        self.local_files = file_paths[shard:][::num_shards]
-        self.local_classes = None if classes is None else classes[shard:][::num_shards]
+        self.local_files = file_paths
         self.random_crop = random_crop
         self.random_flip = random_flip
 
@@ -125,9 +101,6 @@ class ImageDataset(Dataset):
 
 
 def center_crop_arr(pil_image, image_size):
-    # We are not on a new enough PIL to support the `reducing_gap`
-    # argument, which uses BOX downsampling at powers of two first.
-    # Thus, we do it by hand to improve downsample quality.
     while min(*pil_image.size) >= 2 * image_size:
         pil_image = pil_image.resize(
             tuple(x // 2 for x in pil_image.size), resample=Image.BOX
@@ -141,17 +114,15 @@ def center_crop_arr(pil_image, image_size):
     arr = np.array(pil_image)
     crop_y = (arr.shape[0] - image_size) // 2
     crop_x = (arr.shape[1] - image_size) // 2
-    return arr[crop_y : crop_y + image_size, crop_x : crop_x + image_size]
+    return arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size]
 
 
 def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0):
     min_smaller_dim_size = math.ceil(image_size / max_crop_frac)
     max_smaller_dim_size = math.ceil(image_size / min_crop_frac)
-    smaller_dim_size = random.randrange(min_smaller_dim_size, max_smaller_dim_size + 1)
+    smaller_dim_size = random.randrange(
+        min_smaller_dim_size, max_smaller_dim_size + 1)
 
-    # We are not on a new enough PIL to support the `reducing_gap`
-    # argument, which uses BOX downsampling at powers of two first.
-    # Thus, we do it by hand to improve downsample quality.
     while min(*pil_image.size) >= 2 * smaller_dim_size:
         pil_image = pil_image.resize(
             tuple(x // 2 for x in pil_image.size), resample=Image.BOX
@@ -165,37 +136,27 @@ def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0)
     arr = np.array(pil_image)
     crop_y = random.randrange(arr.shape[0] - image_size + 1)
     crop_x = random.randrange(arr.shape[1] - image_size + 1)
-    return arr[crop_y : crop_y + image_size, crop_x : crop_x + image_size]
+    return arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size]
+
 
 def load_webdataset(
     resolution,
     file_paths,
-    classes=None,
-    shard=0,
-    num_shards=1,
     random_crop=False,
     random_flip=True,
-    cache_path=None,
 ):
     dataset = wds.WebDataset(
         file_paths,
-        cache_dir=cache_path,
+        cache_dir=None,
         cache_size=10**10,
         handler=wds.handlers.warn_and_stop,
     )
 
     def filter_dataset_laion(item):
-        if "txt" not in item: return False
-        if "jpg" not in item: return False
-        if "json" not in item: return False
-        metadata = json.loads(item["json"].decode("utf-8"))
-        if metadata["original_width"] < 256 or metadata["original_height"] < 256: return False
-        # metadata = json.loads(item["json"].decode("utf-8"))
-        # original_height = float(metadata["original_height"])
-        # original_width = float(metadata["original_width"])
-        # similarity = float(metadata["similarity"])
-        # aspect_ratio = original_width / original_height
-        # caption = item["txt"].decode("utf-8").lower()
+        if "txt" not in item:
+            return False
+        if "jpg" not in item:
+            return False
         return True
 
     filtered_dataset = dataset.select(filter_dataset_laion)
@@ -207,14 +168,12 @@ def load_webdataset(
             arr = random_crop_arr(pil_image, resolution)
         else:
             arr = center_crop_arr(pil_image, resolution)
-
         if random_flip and random.random() < 0.5:
             arr = arr[:, ::-1]
-
         arr = arr.astype(np.float32) / 127.5 - 1
-
         caption = item["txt"].decode("utf-8").strip()
         return np.transpose(arr, [2, 0, 1]), {}, caption
 
-    transformed_dataset = filtered_dataset.map(preprocess_dataset, handler=wds.handlers.warn_and_stop)
+    transformed_dataset = filtered_dataset.map(
+        preprocess_dataset, handler=wds.handlers.warn_and_stop)
     return transformed_dataset
