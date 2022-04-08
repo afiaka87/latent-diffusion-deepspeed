@@ -284,7 +284,7 @@ def main():
                                              device=device, timestep_respacing="100", ddpm=False, guidance_scale=4.0, shape=(256, 256))
                 if wandb_run is not None:
                     wandb_run.log({
-                        "current_generation": wandb.Image(current_generations, caption="an avocado in the form of an armchair"),
+                        "current_generation": wandb.Image(current_generations, caption=args.test_prompt),
                         "epoch_step": i,
                     })
             if i % args.save_interval == 0 and is_root_rank:
