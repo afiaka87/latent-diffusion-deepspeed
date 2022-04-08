@@ -1,19 +1,19 @@
-import sys
-sys.path.append("glid-3-xl")
 import argparse
 import os
 import random
-from re import A
-from time import time
-from torchvision.transforms.functional import to_pil_image
-import torch
-from dalle_pytorch import distributed_utils
-from matplotlib import use
 
-from deepspeed_config import distributed_setup
+import torch
+import wandb
+from dalle_pytorch import distributed_utils
 from encoders.modules import BERTEmbedder
 from guided_diffusion.image_text_datasets import load_data
-from guided_diffusion.script_util import (create_model_and_diffusion, model_and_diffusion_defaults, create_gaussian_diffusion)
+from guided_diffusion.script_util import (create_gaussian_diffusion,
+                                          create_model_and_diffusion,
+                                          model_and_diffusion_defaults)
+from torchvision.transforms.functional import to_pil_image
+
+from deepspeed_config import distributed_setup
+
 
 def set_requires_grad(model, value):
     for param in model.parameters():
@@ -36,6 +36,7 @@ def load_bert(device, bert_path='bert.ckpt', requires_grad=False):
     bert.eval()
     set_requires_grad(bert, requires_grad)
     return bert
+
 
 def diffusion_options(use_fp16, timestep_respacing):
     options = model_and_diffusion_defaults()
@@ -66,6 +67,7 @@ def load_model_and_diffusion(model_path, use_fp16=True):
             model_path, map_location="cpu"), strict=False)
     if use_fp16:
         model.convert_to_fp16()
+
     return model, diffusion
 
 
@@ -85,20 +87,23 @@ def load_latent_data(encoder, bert, data_dir, batch_size, image_size, device, ra
             text_blank = bert.encode(['']*batch.shape[0]).to(device)
 
             for i in range(batch.shape[0]):
-                if random.randint(0,100) < 20:
+                if random.randint(0, 100) < 20:
                     text_emb[i] = text_blank[i]
 
             model_kwargs["context"] = text_emb
+
             batch = batch.to(device)
             emb = encoder.encode(batch).sample()
             emb *= 0.18215
+
             yield emb, model_kwargs
 
 
 def train_step(model, diffusion, x_start, device, model_kwargs={}):
     with torch.no_grad():
         model_kwargs["context"].to(device)
-        timesteps = torch.randint(0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
+        timesteps = torch.randint(
+            0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
         scaled_timesteps = diffusion._scale_timesteps(timesteps).to(device)
 
         noise = torch.randn_like(x_start, device=device)
@@ -111,6 +116,7 @@ def train_step(model, diffusion, x_start, device, model_kwargs={}):
 def save_model(model, model_path):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     torch.save(model.state_dict(), model_path)
+
 
 @torch.inference_mode()
 def sample(idx, text, bert, ldm, model, batch_size, device, prefix="output", timestep_respacing="50", ddpm=False, guidance_scale=10.0, shape=(256, 256)):
@@ -128,8 +134,9 @@ def sample(idx, text, bert, ldm, model, batch_size, device, prefix="output", tim
     height, width = shape
     text_emb = bert.encode([text]*batch_size).to(device)
     text_blank = bert.encode(['']*batch_size).to(device)
-    kwargs = { "context": torch.cat([text_emb, text_blank], dim=0) }
+    kwargs = {"context": torch.cat([text_emb, text_blank], dim=0)}
     # Create a classifier-free guidance sampling function
+
     def model_fn(x_t, ts, **kwargs):
         half = x_t[: len(x_t) // 2]
         combined = torch.cat([half, half], dim=0)
@@ -162,10 +169,13 @@ def sample(idx, text, bert, ldm, model, batch_size, device, prefix="output", tim
             im = image.unsqueeze(0)
             out = ldm.decode(im)
             out = to_pil_image(out.squeeze(0).add(1).div(2).clamp(0, 1))
-            os.makedirs(os.path.dirname(f"{prefix}/{idx}/{k}.png"), exist_ok=True)
+            os.makedirs(os.path.dirname(
+                f"{prefix}/{idx}/{k}.png"), exist_ok=True)
             out.save(f"{prefix}/{idx}/{k}.png")
 
     out.save("current_sample.png")
+    return out
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -195,8 +205,13 @@ def main():
     parser.add_argument("--use_fp16", action="store_true")
     parser.add_argument("--local_rank", "-local_rank",
                         type=int, default=0)  # stub for distributed
+    parser.add_argument("--test_prompt", type=str, default="")
+    parser.add_argument("--wandb_project", type=str,
+                        default="latent-diffusion-deepspeed")
+    parser.add_argument("--wandb_entity", type=str, default="")
 
     args = parser.parse_args()
+
     data_dir = args.data_dir
     if args.data_dir.startswith("s3://"):
         data_dir = f"pipe:aws s3 cp {args.data_dir} -"
@@ -208,10 +223,15 @@ def main():
     distr_backend = distributed_utils.set_backend_from_args(args)
     distr_backend.initialize()
     is_root_rank = distr_backend.is_local_root_worker()
+    wandb_run = None
+    if is_root_rank:
+        wandb_run = wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                               sync_tensorboard="finetune-ldm-logs/finetune-ldm", tensorboard=True)
 
     # Load backbone models
     # requires a device bc bug in latent-diffusion
-    bert = load_bert(device=device, bert_path=args.bert_path, requires_grad=False)
+    bert = load_bert(device=device, bert_path=args.bert_path,
+                     requires_grad=False)
     encoder = load_encoder(args.kl_model, requires_grad=False)
     if args.use_fp16:  # Careful, this needs to be done _before_ loading the dataset
         bert = bert.half()
@@ -221,26 +241,32 @@ def main():
     encoder.to(device)
 
     # Load data
-    data = load_latent_data(encoder, bert, data_dir, args.batch_size, args.image_size, device, random_flip=args.random_flip, random_crop=args.random_crop, use_webdataset=args.use_webdataset, distr_backend=distr_backend, use_fp16=args.use_fp16)
+    data = load_latent_data(encoder, bert, data_dir, args.batch_size, args.image_size, device, random_flip=args.random_flip,
+                            random_crop=args.random_crop, use_webdataset=args.use_webdataset, distr_backend=distr_backend, use_fp16=args.use_fp16)
 
     # Load the diffusion model (will be converted to fp16 if necessary)
-    model, diffusion = load_model_and_diffusion(model_path=args.resume_ckpt, use_fp16=args.use_fp16)
+    model, diffusion = load_model_and_diffusion(
+        model_path=args.resume_ckpt, use_fp16=args.use_fp16)
     model.to(device)
-    
+
     # Prepare pytorch vs. deepspeed optimizer, dataloader, model
     optimizer = None
     if not args.deepspeed:
-        model.train() # make sure model is in train mode, only for non-deepspeed
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        model.train()  # make sure model is in train mode, only for non-deepspeed
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     else:
-        model, optimizer, distr_data, _ = distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
-        data = distr_data if distr_data is not None else data # returns None if using torch Dataset, deepspeed thing
+        model, optimizer, distr_data, _ = distributed_setup(
+            model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
+        # returns None if using torch Dataset, deepspeed thing
+        data = distr_data if distr_data is not None else data
 
     # Train loop
     for epoch in range(args.num_epochs):
         for i, (x_start, model_kwargs) in enumerate(data):
             with torch.cuda.amp.autocast(enabled=args.use_fp16):
-                loss = train_step(model, diffusion, x_start, device=device, model_kwargs=model_kwargs)
+                loss = train_step(model, diffusion, x_start,
+                                  device=device, model_kwargs=model_kwargs)
             if args.deepspeed:
                 model.backward(loss)
                 model.step()
@@ -252,12 +278,28 @@ def main():
                 accumulated_loss = loss
             if i % args.log_interval == 0 and is_root_rank:
                 print(f"epoch {epoch} step {i} loss {accumulated_loss.item()}")
+
             if i % args.sample_interval == 0 and is_root_rank:
-                sample(idx=i, text="an avocado in the form of an armchair", bert=bert, ldm=encoder, model=model, batch_size=1, device=device, timestep_respacing="40", ddpm=False, guidance_scale=4.0, shape=(256, 256))
+                current_generations = sample(idx=i, text=args.test_prompt, bert=bert, ldm=encoder, model=model, batch_size=1,
+                                             device=device, timestep_respacing="100", ddpm=False, guidance_scale=4.0, shape=(256, 256))
+                if wandb_run is not None:
+                    wandb_run.log({
+                        "current_generation": wandb.Image(current_generations, caption="an avocado in the form of an armchair"),
+                        "epoch_step": i,
+                    })
             if i % args.save_interval == 0 and is_root_rank:
                 save_model(model, os.path.join(
                     args.log_dir, f"diffusion-{epoch}-{i}.pt"))
                 print(f"saved model to {args.log_dir}")
+        if is_root_rank and wandb_run is not None:
+            save_model(model, os.path.join(
+                args.log_dir, f"diffusion-{epoch}-last.pt"))
+            print(f"saved model to {args.log_dir}")
+            artifact = wandb.Artifact(name="LDM-finetune", type="model")
+            artifact.add_file(os.path.join(
+                args.log_dir, f"diffusion-{epoch}-last.pt"))
+            wandb_run.log_artifact(artifact)
+            print(f"logged model to wandb after epoch {epoch}")
 
 
 if __name__ == "__main__":
