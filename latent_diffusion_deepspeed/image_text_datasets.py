@@ -9,8 +9,6 @@ import blobfile as bf
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-DATASET_SIZE = 100000
-
 def load_data(
     data_dir,
     batch_size,
@@ -34,7 +32,8 @@ def load_data(
             random_crop=random_crop,
             random_flip=random_flip,
         )
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+        dl = DataLoader(ds, batch_size=batch_size,
+                        shuffle=True, drop_last=True)
     while True:
         yield from dl
 
@@ -143,6 +142,7 @@ def load_webdataset(
     file_paths,
     random_crop=False,
     random_flip=True,
+    enable_metadata=False,
 ):
     dataset = wds.WebDataset(
         file_paths,
@@ -156,21 +156,27 @@ def load_webdataset(
             return False
         if "jpg" not in item:
             return False
+        if "json" not in item and enable_metadata:
+            return False
+        metadata = json.loads(item["json"].decode("utf-8"))
+        if metadata["original_width"] < resolution and metadata["original_height"] < resolution:
+            return False
         return True
 
     filtered_dataset = dataset.select(filter_dataset_laion)
 
     def preprocess_dataset(item):
         image_data = item["jpg"]
+        caption = item["txt"].decode("utf-8").strip()
         pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
         if random_crop:
             arr = random_crop_arr(pil_image, resolution)
         else:
             arr = center_crop_arr(pil_image, resolution)
-        if random_flip and random.random() < 0.5:
-            arr = arr[:, ::-1]
+        if not ("left" in caption or "right" in caption):
+            if random_flip and random.random() < 0.5:
+                arr = arr[:, ::-1]
         arr = arr.astype(np.float32) / 127.5 - 1
-        caption = item["txt"].decode("utf-8").strip()
         return np.transpose(arr, [2, 0, 1]), {}, caption
 
     transformed_dataset = filtered_dataset.map(
