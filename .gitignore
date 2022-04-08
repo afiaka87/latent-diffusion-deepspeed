@@ -1,3 +1,6 @@
 train.sh
 latent_diffusion_deepspeed.egg-info/
 .venv/
+.vscode/
+glid-3-xl/
+dist/
