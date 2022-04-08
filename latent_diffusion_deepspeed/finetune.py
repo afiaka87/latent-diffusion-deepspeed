@@ -285,7 +285,6 @@ def main():
                 if wandb_run is not None:
                     wandb_run.log({
                         "current_generation": wandb.Image(current_generations, caption=args.test_prompt),
-                        "epoch_step": i,
                     })
             if i % args.save_interval == 0 and is_root_rank:
                 save_model(model, os.path.join(
