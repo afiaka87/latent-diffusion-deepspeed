@@ -1,4 +1,4 @@
-# latent-diffusion-deepspeed (broken - WIP)
+# latent-diffusion-deepspeed (WIP)
 Finetune the 1.4B latent diffusion text2img-large checkpoint from CompVis using deepspeed. (work-in-progress)
 
 ## Download weights
