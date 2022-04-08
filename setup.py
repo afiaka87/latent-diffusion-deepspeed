@@ -1,0 +1,42 @@
+from setuptools import setup
+
+setup(
+    name="latent-diffusion-deepspeed",
+    py_modules=["latent_diffusion_deepspeed"],
+    install_requires=[
+        "axial-positional-embedding",
+        "blobfile",
+        "braceexpand",
+        "Cython",
+        "DALL-E",
+        "dalle-pytorch",
+        "einops",
+        "ftfy",
+        "matplotlib",
+        "mmh3",
+        "ninja",
+        "numpy",
+        "omegaconf",
+        "pandas",
+        "Pillow",
+        "pycocoevalcap",
+        "pycocotools",
+        "pycodestyle",
+        "PyYAML",
+        "regex",
+        "requests",
+        "rotary-embedding-torch",
+        "tensorboard",
+        "timm",
+        "tokenizers",
+        "tqdm",
+        "transformers",
+        "wandb",
+        "webdataset",
+        "youtokentome",
+        # "taming_transformers @ git+https://github.com/CompVis/taming-transformers.git#egg=taming_transformers",
+        # "latent_diffusion @ git+https://github.com/CompVis/latent-diffusion.git#egg=latent_diffusion",
+        # "guided_diffusion @ git+https://github.com/Jack000/glid-3-xl.git#egg=guided_diffusion",
+        # "clip @ git+https://github.com/openai/CLIP.git#egg=clip"
+    ]
+)
