@@ -20,7 +20,7 @@ def deepspeed_config_from_args(args):
             }
         },
         'train_batch_size': args.batch_size,
-        # 'gradient_accumulation_steps': args.ga_steps,
+        'gradient_accumulation_steps': args.ga_steps,
         'gradient_clipping': 1.0,
         'fp16': {
             'enabled': args.use_fp16,

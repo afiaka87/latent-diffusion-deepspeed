@@ -1,3 +1,5 @@
+import sys
+sys.path.append("glid-3-xl")
 import argparse
 import os
 import random
@@ -8,13 +10,10 @@ import torch
 from dalle_pytorch import distributed_utils
 from matplotlib import use
 
-from deepspeed_config import deepspeed_config_from_args, distributed_setup
+from deepspeed_config import distributed_setup
 from encoders.modules import BERTEmbedder
 from guided_diffusion.image_text_datasets import load_data
-from guided_diffusion.script_util import (create_model_and_diffusion,
-                                          model_and_diffusion_defaults)
-from guided_diffusion.train_util import TrainLoop
-
+from guided_diffusion.script_util import (create_model_and_diffusion, model_and_diffusion_defaults)
 
 def set_requires_grad(model, value):
     for param in model.parameters():
