@@ -1,13 +1,14 @@
 def deepspeed_config_from_args(args):
     return {
-        "zero_optimization": {
+        "zero_optimization": { 
             "stage": 1,
+            "round_robin_gradients": True,
         },
         "optimizer": {
             "type": "AdamW",
             "params": {
                 "lr": args.lr,
-                "weight_decay": args.weight_decay,
+                "weight_decay": args.weight_decay
             }
         },
         "scheduler": {
@@ -16,22 +17,22 @@ def deepspeed_config_from_args(args):
                 "warmup_min_lr": args.min_lr,
                 "warmup_max_lr": args.lr,
                 "warmup_num_steps": args.warmup_steps,
-                "total_num_steps": args.max_steps,
+                "total_num_steps": int(args.max_steps / args.batch_size),
             }
         },
-        'train_batch_size': args.batch_size,
+        'train_micro_batch_size_per_gpu': args.batch_size,
         'gradient_accumulation_steps': args.ga_steps,
         'gradient_clipping': 1.0,
         'fp16': {
             'enabled': args.use_fp16,
-            'initial_scale_power': 28, # the default, often it's better to start lower around 16-24
+            'initial_scale_power': 24, # the default, often it's better to start lower around 16-24
         },
         "tensorboard": {
             "enabled": True,
-            "output_path": "finetune-ldm-logs/",
-            "job_name": "finetune-ldm"
+            "output_path": f"tensorboard_logs/{args.wandb_project}",
+            "job_name": f"{args.wandb_project}",
         },
-        "steps_per_print": 10,
+        "steps_per_print": args.log_interval,
         "wall_clock_breakdown": False,
     }
 
