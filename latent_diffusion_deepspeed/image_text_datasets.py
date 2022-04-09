@@ -1,37 +1,42 @@
 import io
-import json
-import webdataset as wds
 import math
+import os
+from posixpath import expanduser
 import random
+from pathlib import Path
 
-from PIL import Image
 import blobfile as bf
 import numpy as np
+import webdataset as wds
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
-def load_data(
+
+def create_dataloader(
+    distr_backend,
     data_dir,
     batch_size,
     image_size,
+    dataset_length,
     random_crop=False,
-    random_flip=True,
+    random_flip=False,
     use_webdataset=False,
+    num_workers=0,
 ):
     if use_webdataset:
-        ds = load_webdataset(
-            resolution=image_size,
-            file_paths=data_dir,
-            random_crop=random_crop,
-            random_flip=random_flip,
-        )
-        dl = DataLoader(ds, batch_size=batch_size)
+        wds_urls = parse_data_dir(data_dir)
+        ds = load_webdataset(distr_backend, resolution=image_size,
+                             file_paths=wds_urls, batch_size=batch_size, random_crop=random_crop, random_flip=random_flip)
+        dl = wds.WebLoader(ds, batch_size=None,
+                           shuffle=False, num_workers=num_workers)
+        number_of_batches = dataset_length // (
+            batch_size * distr_backend.get_world_size())
+        dl = dl.slice(number_of_batches)
+        dl.length = number_of_batches
+        print(f"Loaded webdataset with {number_of_batches} batches on {distr_backend.get_world_size()} gpus")
     else:
-        ds = ImageDataset(
-            resolution=image_size,
-            file_paths=data_dir,
-            random_crop=random_crop,
-            random_flip=random_flip,
-        )
+        ds = ImageDataset(resolution=image_size, file_paths=data_dir,
+                          random_crop=random_crop, random_flip=random_flip)
         dl = DataLoader(ds, batch_size=batch_size,
                         shuffle=True, drop_last=True)
     while True:
@@ -137,48 +142,80 @@ def random_crop_arr(pil_image, image_size, min_crop_frac=0.8, max_crop_frac=1.0)
     return arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size]
 
 
+def clean_caption(caption):
+    caption = caption.decode("utf-8")
+    caption = caption.replace("\n", " ").replace(
+        "\t", " ").replace("\r", " ").replace("  ", " ")
+    caption = caption.strip()
+    return caption
+
+
 def load_webdataset(
+    distr_backend,
     resolution,
     file_paths,
+    batch_size,
     random_crop=False,
-    random_flip=True,
-    enable_metadata=False,
+    random_flip=False,
 ):
-    dataset = wds.WebDataset(
-        file_paths,
-        cache_dir=None,
-        cache_size=10**10,
-        handler=wds.handlers.warn_and_stop,
-    )
-
-    def filter_dataset_laion(item):
-        if "txt" not in item:
-            return False
-        if "jpg" not in item:
-            return False
-        if "json" not in item and enable_metadata:
-            return False
-        metadata = json.loads(item["json"].decode("utf-8"))
-        if metadata["original_width"] < resolution and metadata["original_height"] < resolution:
-            return False
+    def filter_by_item(item):
+        if mycap not in item: return False
+        if myimg not in item: return False
         return True
 
-    filtered_dataset = dataset.select(filter_dataset_laion)
-
-    def preprocess_dataset(item):
-        image_data = item["jpg"]
-        caption = item["txt"].decode("utf-8").strip()
-        pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+    def pil_transform_to_np(arr):
         if random_crop:
-            arr = random_crop_arr(pil_image, resolution)
+            arr = random_crop_arr(arr, resolution)
         else:
-            arr = center_crop_arr(pil_image, resolution)
-        if not ("left" in caption or "right" in caption):
-            if random_flip and random.random() < 0.5:
-                arr = arr[:, ::-1]
+            arr = center_crop_arr(arr, resolution)
+        if random_flip and random.random() < 0.5:
+            arr = arr[:, ::-1]
         arr = arr.astype(np.float32) / 127.5 - 1
-        return np.transpose(arr, [2, 0, 1]), {}, caption
+        return np.transpose(arr, [2, 0, 1])
 
-    transformed_dataset = filtered_dataset.map(
-        preprocess_dataset, handler=wds.handlers.warn_and_stop)
-    return transformed_dataset
+    def bytes_to_pil_image(item): 
+        pil_image = Image.open(io.BytesIO(item)).convert("RGB")
+        pil_image.load()
+        return pil_image
+
+    myimg, mycap = "jpg", "txt"
+    image_text_mapping = {
+        myimg: bytes_to_pil_image,
+        mycap: clean_caption
+    }
+    image_mapping = {myimg: pil_transform_to_np}
+    dataset = wds.WebDataset(urls=file_paths,
+                             handler=wds.warn_and_continue,
+                             cache_dir=expanduser(
+                                 "~/.cache/latent-diffusion-webdataset"),
+                             cache_size=10**10)
+    filtered_dataset = dataset.select(filter_by_item)
+    dataset = filtered_dataset.map_dict(**image_text_mapping).map_dict(**image_mapping).to_tuple(
+        mycap, myimg).batched(batch_size / distr_backend.get_world_size(), partial=True)
+    return dataset
+
+
+def parse_data_dir(data_dir):
+    # quit early if no tar files were found
+    if Path(data_dir).is_dir():
+        wds_uris = [str(p) for p in Path(data_dir).glob(
+            "**/*") if ".tar" in str(p).lower()]  # .name
+        assert len(
+            wds_uris) > 0, 'The directory ({}) does not contain any WebDataset/.tar files.'.format(data_dir)
+        print('Found {} WebDataset .tar(.gz) file(s) under given path {}!'.format(
+            len(wds_uris), data_dir))
+    elif ('http://' in data_dir.lower()) | ('https://' in data_dir.lower()):
+        wds_uris = f"pipe:curl -L -s {data_dir} || true"
+        print('Found {} http(s) link under given path!'.format(
+            len(wds_uris), data_dir))
+    elif 'gs://' in data_dir.lower():
+        wds_uris = f"pipe:gsutil cat {data_dir} || true"
+        print('Found {} GCS link under given path!'.format(
+            len(wds_uris), data_dir))
+    elif '.tar' in data_dir:
+        wds_uris = data_dir
+        print('Found WebDataset .tar(.gz) file under given path {}!'.format(data_dir))
+    else:
+        raise Exception(
+            'No folder, no .tar(.gz) and no url pointing to tar files provided under {}.'.format(data_dir))
+    return wds_uris

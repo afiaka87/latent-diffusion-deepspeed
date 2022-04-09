@@ -1,18 +1,85 @@
+from glob import glob
+from pathlib import Path
 import argparse
 import os
 import random
-
-import torch
+import shutil
 import wandb
+import torch
 from dalle_pytorch import distributed_utils
-from encoders.modules import BERTEmbedder
-from guided_diffusion.image_text_datasets import load_data
-from guided_diffusion.script_util import (create_gaussian_diffusion,
-                                          create_model_and_diffusion,
-                                          model_and_diffusion_defaults)
 from torchvision.transforms.functional import to_pil_image
 
 from deepspeed_config import distributed_setup
+from encoders.modules import BERTEmbedder
+from guided_diffusion.image_text_datasets import create_dataloader
+from guided_diffusion.script_util import (create_gaussian_diffusion, create_model_and_diffusion,
+                                          model_and_diffusion_defaults)
+from guided_diffusion.train_util import TrainLoop
+
+DEEPSPEED_CP_AUX_FILENAME = 'auxiliary.pt'
+KEEP_N_CHECKPOINTS = 10
+
+
+def cp_path_to_dir(cp_path, tag):
+    """Convert a checkpoint path to a directory with `tag` inserted.
+    If `cp_path` is already a directory, return it unchanged.
+    """
+    if not isinstance(cp_path, Path):
+        cp_path = Path(cp_path)
+    if cp_path.is_dir():
+        return cp_path
+    path_sans_extension = cp_path.parent / cp_path.stem
+    cp_dir = Path(f'{path_sans_extension}-{tag}-cp')
+    return cp_dir
+
+
+@torch.no_grad()
+def save_model(model, path: str, is_root: bool, epoch=0, using_deepspeed=False, opt=None):
+    save_obj = {'epoch': epoch, }
+
+    if using_deepspeed:
+        cp_dir = cp_path_to_dir(path, 'ds')
+
+        if KEEP_N_CHECKPOINTS is not None and is_root:
+            checkpoints = sorted(glob(str(cp_dir / "global*")),
+                                 key=os.path.getmtime, reverse=True)
+            for checkpoint in checkpoints[KEEP_N_CHECKPOINTS:]:
+                shutil.rmtree(checkpoint)
+
+        model.save_checkpoint(cp_dir, client_state=save_obj)
+
+        if not is_root:
+            return
+
+        # Save auxiliary values so we can reuse the standard routine
+        # for loading.
+        save_obj = {
+            **save_obj,
+            # further help.
+            # Save a nonsense value that directs the user to
+            'weights': (
+                'To get a working standard checkpoint, '
+                'look into consolidating DeepSpeed checkpoints.'
+            ),
+        }
+        torch.save(save_obj, str(cp_dir / DEEPSPEED_CP_AUX_FILENAME))
+        # if deepspeed_config.get('zero_optimization', {}).get('stage', 0) >= 2: # see https://github.com/lucidrains/DALLE-pytorch/wiki/DeepSpeed-Checkpoints
+        # return
+
+    if not is_root:
+        return
+
+    save_obj = {
+        **save_obj,
+        'weights': model.state_dict(),
+    }
+    if opt is not None:
+        save_obj = {
+            **save_obj,
+            'opt_state': opt.state_dict(),
+        }
+
+    torch.save(save_obj, path)
 
 
 def set_requires_grad(model, value):
@@ -20,6 +87,7 @@ def set_requires_grad(model, value):
         param.requires_grad = value
 
 
+@torch.no_grad()
 def load_encoder(model, requires_grad=False):
     encoder = torch.load(model, map_location="cpu")
     encoder.eval()
@@ -28,6 +96,7 @@ def load_encoder(model, requires_grad=False):
     return encoder
 
 
+@torch.no_grad()
 def load_bert(device, bert_path='bert.ckpt', requires_grad=False):
     assert os.path.exists(bert_path), "bert path does not exist"
     bert = BERTEmbedder(1280, 32, device=device)
@@ -67,55 +136,48 @@ def load_model_and_diffusion(model_path, use_fp16=True):
             model_path, map_location="cpu"), strict=False)
     if use_fp16:
         model.convert_to_fp16()
-
+    model.requires_grad_(True)
     return model, diffusion
 
 
-def load_latent_data(encoder, bert, data_dir, batch_size, image_size, device, random_flip, random_crop, use_webdataset, distr_backend, use_fp16):
-    dataloader = load_data(
+@torch.no_grad()
+def load_latent_data(encoder, bert, data_dir, batch_size, image_size, device, random_flip, random_crop, use_webdataset, distr_backend, use_fp16, max_steps, num_workers=0):
+    dataloader = create_dataloader(
+        distr_backend,
         data_dir,
         batch_size,
         image_size,
+        # dataset_length=max_steps*batch_size,
+        dataset_length=max_steps, #TODO
         random_crop=random_crop,
         random_flip=random_flip,
         use_webdataset=use_webdataset,
+        num_workers=num_workers,
     )
     with torch.cuda.amp.autocast(enabled=use_fp16):
-        for batch, model_kwargs, text in dataloader:
-            batch = batch.to(device)
+        for text, batch in dataloader:
             text_emb = bert.encode(list(text)).to(device)
             text_blank = bert.encode(['']*batch.shape[0]).to(device)
-
             for i in range(batch.shape[0]):
                 if random.randint(0, 100) < 20:
                     text_emb[i] = text_blank[i]
 
-            model_kwargs["context"] = text_emb
-
+            # model_kwargs["context"] = text_emb
+            model_kwargs = {"context": text_emb}
             batch = batch.to(device)
             emb = encoder.encode(batch).sample()
             emb *= 0.18215
-
             yield emb, model_kwargs
 
 
 def train_step(model, diffusion, x_start, device, model_kwargs={}):
-    with torch.no_grad():
-        model_kwargs["context"].to(device)
-        timesteps = torch.randint(
-            0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
-        scaled_timesteps = diffusion._scale_timesteps(timesteps).to(device)
-
-        noise = torch.randn_like(x_start, device=device)
-        x_t = diffusion.q_sample(x_start, timesteps, noise=noise).to(device)
-
-    epsilon = model(x_t, scaled_timesteps, **model_kwargs).to(device)
+    model_kwargs["context"].to(device)
+    timesteps = torch.randint(0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
+    scaled_timesteps = diffusion._scale_timesteps(timesteps).to(device)
+    noise = torch.randn_like(x_start, device=device)
+    x_t = diffusion.q_sample(x_start, timesteps, noise=noise).to(device)
+    epsilon = model(x_t.to(device), scaled_timesteps.to(device), **model_kwargs).to(device).requires_grad_(True)
     return torch.nn.functional.mse_loss(epsilon, noise.detach())
-
-
-def save_model(model, model_path):
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    torch.save(model.state_dict(), model_path)
 
 
 @torch.inference_mode()
@@ -222,6 +284,7 @@ def main():
     # Setup deepspeed distributed training
     distr_backend = distributed_utils.set_backend_from_args(args)
     distr_backend.initialize()
+    distr_backend.check_batch_size(args.batch_size)
     is_root_rank = distr_backend.is_local_root_worker()
     wandb_run = None
     if is_root_rank:
@@ -239,10 +302,9 @@ def main():
 
     bert.to(device)
     encoder.to(device)
-
     # Load data
-    data = load_latent_data(encoder, bert, data_dir, args.batch_size, args.image_size, device, random_flip=args.random_flip,
-                            random_crop=args.random_crop, use_webdataset=args.use_webdataset, distr_backend=distr_backend, use_fp16=args.use_fp16)
+    data = load_latent_data(encoder, bert, data_dir, args.batch_size, args.image_size, device, random_flip=args.random_flip, random_crop=args.random_crop,
+                            use_webdataset=args.use_webdataset, distr_backend=distr_backend, use_fp16=args.use_fp16, max_steps=args.max_steps, num_workers=args.num_workers)
 
     # Load the diffusion model (will be converted to fp16 if necessary)
     model, diffusion = load_model_and_diffusion(
@@ -258,8 +320,8 @@ def main():
     else:
         model, optimizer, distr_data, _ = distributed_setup(
             model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
+        if not args.use_webdataset: data = distr_data
         # returns None if using torch Dataset, deepspeed thing
-        data = distr_data if distr_data is not None else data
 
     # Train loop
     for epoch in range(args.num_epochs):
@@ -286,19 +348,13 @@ def main():
                     wandb_run.log({
                         "current_generation": wandb.Image(current_generations, caption=args.test_prompt),
                     })
-            if i % args.save_interval == 0 and is_root_rank:
-                save_model(model, os.path.join(
-                    args.log_dir, f"diffusion-{epoch}-{i}.pt"))
-                print(f"saved model to {args.log_dir}")
-        if is_root_rank and wandb_run is not None:
-            save_model(model, os.path.join(
-                args.log_dir, f"diffusion-{epoch}-last.pt"))
-            print(f"saved model to {args.log_dir}")
-            artifact = wandb.Artifact(name="LDM-finetune", type="model")
-            artifact.add_file(os.path.join(
-                args.log_dir, f"diffusion-{epoch}-last.pt"))
-            wandb_run.log_artifact(artifact)
-            print(f"logged model to wandb after epoch {epoch}")
+            if i % args.save_interval == 0:
+                save_model(model=model, path=args.log_dir, is_root=is_root_rank,
+                           epoch=epoch, using_deepspeed=args.deepspeed, opt=optimizer)
+
+    save_model(model=model, path=args.log_dir, is_root=is_root_rank,
+               epoch=epoch, using_deepspeed=args.deepspeed, opt=optimizer)
+    print(f"saved model to {args.log_dir}")
 
 
 if __name__ == "__main__":

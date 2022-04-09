@@ -6,23 +6,24 @@ deepspeed --include localhost:0,1,2,3,4,5,6,7 latent_diffusion_deepspeed/finetun
     --data_dir $data_dir \
     --log_dir $log_dir \
     --image_size 256 \
-    --batch_size 112 \
+    --batch_size 512 \
     --ga_steps 8 \
     --kl_model 'kl-f8.pt' \
     --bert_path 'bert.ckpt' \
     --resume_ckpt 'diffusion.pt' \
     --num_epochs 10 \
-    --lr 1e-4 \
-    --min_lr 7e-6 \
+    --lr 1e-5 \
+    --min_lr 1e-6 \
     --weight_decay 0.01 \
     --seed 0 \
-    --random_flip \
     --log_interval 5 \
     --save_interval 1000 \
-    --sample_interval 100 \
+    --sample_interval 50 \
     --num_workers 8 \
-    --max_steps 50000 \
+    --max_steps 1_000_000 \
     --warmup_steps 1000 \
     --use_webdataset \
     --deepspeed \
-    --use_fp16
+    --use_fp16 \
+    --wandb_project "latent-diffusion-deepspeed" \
+    --wandb_entity ""
