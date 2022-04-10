@@ -1,5 +1,7 @@
 import torch
 from torch import optim
+from torch.optim._functional import adamw
+from transformers import AdamW
 
 
 class AdamWEMA(optim.Optimizer):
@@ -91,7 +93,8 @@ class AdamWEMA(optim.Optimizer):
                 # record the step after step update
                 state_steps.append(state['step'])
 
-            optim._functional.adamw(params_with_grad,
+            # optim._functional.
+            adamw(params_with_grad,
                     grads,
                     exp_avgs,
                     exp_avg_sqs,
@@ -102,7 +105,8 @@ class AdamWEMA(optim.Optimizer):
                     beta2=beta2,
                     lr=group['lr'],
                     weight_decay=group['weight_decay'],
-                    eps=group['eps'])
+                    eps=group['eps'],
+                    maximize=False)
 
             cur_ema_decay = min(ema_decay, 1 - state['step'] ** -ema_power)
             for param, ema_param in zip(params_with_grad, ema_params_with_grad):
