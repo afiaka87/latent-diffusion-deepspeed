@@ -1,15 +1,8 @@
 def deepspeed_config_from_args(args):
-    return {
+    deepspeed_config = {
         "zero_optimization": { 
             "stage": 1,
             "round_robin_gradients": True,
-        },
-        "optimizer": {
-            "type": "AdamW",
-            "params": {
-                "lr": args.lr,
-                "weight_decay": args.weight_decay
-            }
         },
         "scheduler": {
             "type": "WarmupDecayLR",
@@ -34,8 +27,9 @@ def deepspeed_config_from_args(args):
         },
         "steps_per_print": args.log_interval,
         "wall_clock_breakdown": False,
+        "zero_allow_untested_optimizer": True
     }
-
+    return deepspeed_config
 
 
 def distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset):
