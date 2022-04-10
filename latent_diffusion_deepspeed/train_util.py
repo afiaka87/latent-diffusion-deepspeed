@@ -50,35 +50,3 @@ def save_model(model, path: str, is_root: bool, epoch=0, using_deepspeed=False, 
     if opt is not None:
         save_obj = { **save_obj, 'opt_state': opt.state_dict(), }
     torch.save(save_obj, path)
-
-
-# dataloader = create_dataloader(
-#     distr_backend,
-#     data_dir,
-#     batch_size,
-#     image_size,
-#     # dataset_length=max_steps*batch_size,
-#     dataset_length=max_steps, #TODO
-#     random_crop=random_crop,
-#     random_flip=random_flip,
-#     use_webdataset=use_webdataset,
-#     num_workers=num_workers,
-# )
-@torch.no_grad()
-def ldm_encode_data_gn(dataloader, encoder, bert, device, use_fp16):
-    with torch.cuda.amp.autocast(enabled=use_fp16):
-        for text, batch in dataloader:
-            text_emb = bert.encode(list(text)).to(device)
-            text_blank = bert.encode(['']*batch.shape[0]).to(device)
-            for i in range(batch.shape[0]):
-                if random.randint(0, 100) < 20:
-                    text_emb[i] = text_blank[i]
-
-            # model_kwargs["context"] = text_emb
-            model_kwargs = {"context": text_emb}
-            batch = batch.to(device)
-            emb = encoder.encode(batch).sample()
-            emb *= 0.18215
-            yield emb, model_kwargs
-
-

@@ -48,12 +48,14 @@ def main():
     encoder.to(device)
 
     # Load the diffusion model (will be converted to fp16 if necessary)
-    model, diffusion = load_model_and_diffusion(
-        model_path=args.resume_ckpt, use_fp16=args.use_fp16)
+    model, _ = load_model_and_diffusion(model_path=args.resume_ckpt, use_fp16=args.use_fp16)
     model.to(device)
 
     samples = sample_diffusion(idx=0, text=args.prompt, bert=bert, ldm=encoder, model=model, batch_size=args.batch_size,
                                device=device, prefix=args.log_dir, timestep_respacing=args.timestep_respacing, ddpm=args.ddpm, guidance_scale=args.guidance_scale, shape=(args.width, args.height))
+
+    # Save the samples # TODO support higher batch size
+    wandb_run.log({"samples": samples})
 
 
 if __name__ == "__main__":

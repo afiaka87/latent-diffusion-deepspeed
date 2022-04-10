@@ -9,13 +9,8 @@ import torch
 import wandb
 from dalle_pytorch import distributed_utils
 from guided_diffusion.image_text_datasets import create_dataloader
-from guided_diffusion.script_util import (create_gaussian_diffusion,
-                                          create_model_and_diffusion,
-                                          model_and_diffusion_defaults)
-from guided_diffusion.train_util import TrainLoop
-from torchvision.transforms.functional import to_pil_image
 
-from deepspeed_config import distributed_setup
+from latent_diffusion_deepspeed.deepspeed_config import distributed_setup
 from latent_diffusion_deepspeed.model_util import (load_ldm_bert,
                                                    load_ldm_encoder,
                                                    load_model_and_diffusion,
