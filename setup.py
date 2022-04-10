@@ -13,6 +13,7 @@ setup(
         "einops",
         "ftfy",
         "matplotlib",
+        "mpi4py",
         "mmh3",
         "ninja",
         "numpy",

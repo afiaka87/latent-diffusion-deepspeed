@@ -1,22 +1,17 @@
 import argparse
-import os
 import random
-import shutil
-from glob import glob
-from pathlib import Path
 
 import torch
 import wandb
 from dalle_pytorch import distributed_utils
-from guided_diffusion.image_text_datasets import create_dataloader
 
 from latent_diffusion_deepspeed.deepspeed_config import distributed_setup
+from latent_diffusion_deepspeed.image_text_datasets import create_dataloader
 from latent_diffusion_deepspeed.model_util import (load_ldm_bert,
                                                    load_ldm_encoder,
                                                    load_model_and_diffusion,
                                                    sample_diffusion)
-from latent_diffusion_deepspeed.train_util import (ldm_encode_data_gn,
-                                                   save_model)
+from latent_diffusion_deepspeed.train_util import save_model
 
 
 @torch.no_grad()

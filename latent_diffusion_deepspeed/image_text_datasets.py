@@ -1,6 +1,5 @@
 import io
 import math
-import os
 from posixpath import expanduser
 import random
 from pathlib import Path

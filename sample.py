@@ -1,7 +1,6 @@
 import argparse
 import wandb
 import torch
-from dalle_pytorch import distributed_utils
 from finetune import load_bert, load_encoder, load_model_and_diffusion, load_latent_data
 from latent_diffusion_deepspeed.model_util import sample_diffusion
 

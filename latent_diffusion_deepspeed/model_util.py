@@ -1,15 +1,17 @@
 import os
 import torch
-import encoders # latent diffusion auto-encoder
 from torchvision.transforms.functional import to_pil_image
-from guided_diffusion.script_util import (create_gaussian_diffusion, create_model_and_diffusion,
-                                          model_and_diffusion_defaults)
+from encoders.modules import BERTEmbedder
+
+from guided_diffusion.script_util import create_gaussian_diffusion, create_model_and_diffusion, model_and_diffusion_defaults
+
 def set_requires_grad(model, value):
     for param in model.parameters():
         param.requires_grad = value
 
 
 def load_ldm_encoder(model, requires_grad=False):
+    assert os.path.exists(model), "model not found, download from https://dall-3.com/models/glid-3-xl/kl-f8.pt"
     encoder = torch.load(model, map_location="cpu")
     encoder.eval()
     set_requires_grad(encoder, requires_grad)
@@ -18,8 +20,8 @@ def load_ldm_encoder(model, requires_grad=False):
 
 
 def load_ldm_bert(device, bert_path='bert.ckpt', requires_grad=False):
-    assert os.path.exists(bert_path), "bert path does not exist"
-    bert = encoders.modules.BERTEmbedder(1280, 32, device=device)
+    assert os.path.exists(bert_path), "bert not found, download from https://dall-3.com/models/glid-3-xl/bert.pt"
+    bert = BERTEmbedder(1280, 32, device=device)
     sd = torch.load(bert_path, map_location="cpu")
     bert.load_state_dict(sd)
     bert.eval()
@@ -50,7 +52,7 @@ def load_model_and_diffusion(model_path, use_fp16=True):
     options = diffusion_options(use_fp16, timestep_respacing=str(1000))
     model, diffusion = create_model_and_diffusion(**options)
     if len(model_path) > 0:
-        assert os.path.exists(model_path), "model path does not exist"
+        assert os.path.exists(model_path), "model not found, download from https://dall-3.com/models/glid-3-xl/diffusion.pt"
         model.load_state_dict(torch.load(
             model_path, map_location="cpu"), strict=False)
     if use_fp16:
