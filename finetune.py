@@ -1,5 +1,6 @@
 import argparse
 import random
+import time
 
 import torch
 import wandb
@@ -128,8 +129,14 @@ def main():
         model_path=args.resume_ckpt, use_fp16=args.use_fp16)
     model.to(device)
 
-    # Use Katherine Crowson's deepspeed-compatible AdamW w/ EMA. (thanks!)
-    optimizer = AdamWEMA(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, ema_decay=args.ema_decay, ema_power=1.)
+    optimizer = None
+    if distr_backend.get_world_size() == 1:
+        # Use Katherine Crowson's deepspeed-compatible AdamW w/ EMA. (thanks!)
+        optimizer = AdamWEMA(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, ema_decay=args.ema_decay, ema_power=1.)
+    else:
+        print(f"Sorry, EMA is only supported on single GPU due to a bug in my webdataset code. Check the gh repo for a future fix.")
+        print(f"Continuing training without EMA in 5 seconds. CTRL+C to cancel.")
+        time.sleep(5)
 
     # Prepare pytorch vs. deepspeed optimizer, dataloader, model
     if not args.deepspeed:
