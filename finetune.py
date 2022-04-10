@@ -4,6 +4,7 @@ import random
 import torch
 import wandb
 from dalle_pytorch import distributed_utils
+from crowsonkb.adamw_ema import AdamWEMA
 
 from latent_diffusion_deepspeed.deepspeed_config import distributed_setup
 from latent_diffusion_deepspeed.image_text_datasets import create_dataloader
@@ -59,6 +60,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--min_lr", type=float, default=1e-8)
     parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--ema_decay", type=float, default=0.999)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--sample_interval", type=int, default=100)
@@ -126,17 +128,16 @@ def main():
         model_path=args.resume_ckpt, use_fp16=args.use_fp16)
     model.to(device)
 
+    # Use Katherine Crowson's deepspeed-compatible AdamW w/ EMA. (thanks!)
+    optimizer = AdamWEMA(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, ema_decay=args.ema_decay, ema_power=1.)
+
     # Prepare pytorch vs. deepspeed optimizer, dataloader, model
-    optimizer = None
     if not args.deepspeed:
         model.train()  # make sure model is in train mode, only for non-deepspeed
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     else:
-        model, optimizer, distr_data, _ = distributed_setup(
-            model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
-        if not args.use_webdataset:
-            data = distr_data # returns None if using torch Dataset, deepspeed thing
+        model, optimizer, distr_data, _ = distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
+    if not args.use_webdataset:
+        data = distr_data # returns None if using torch Dataset, deepspeed thing
 
     # Train loop
     for epoch in range(args.num_epochs):
