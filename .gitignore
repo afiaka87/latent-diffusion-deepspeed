@@ -2,4 +2,14 @@ latent_diffusion_deepspeed.egg-info/
 .venv/
 .vscode/
 glid-3-xl/
+dist/test.sh
+*.pt 
+*.ckpt
+*.png
 dist/
+latent-diffusion/
+__pycache__/
+output/
+tensorboard_logs/
+test.sh
+wandb/
