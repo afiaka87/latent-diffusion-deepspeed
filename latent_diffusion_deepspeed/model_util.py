@@ -62,12 +62,11 @@ def load_model_and_diffusion(model_path, use_fp16=True):
             model_path, map_location="cpu"), strict=False)
     if use_fp16:
         model.convert_to_fp16()
-    model.requires_grad_(True)
     return model, diffusion
 
 
 @torch.inference_mode()
-def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output", timestep_respacing="50", ddpm=False, guidance_scale=10.0, shape=(256, 256), save_last=True, wandb_run=None, images_per_row=8):
+def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output", timestep_respacing="30", ddpm=False, guidance_scale=10.0, shape=(256, 256), save_last=True, wandb_run=None, images_per_row=8):
     sampling_options = diffusion_options(False, timestep_respacing)
     sampling_diffusion = create_gaussian_diffusion(
         steps=sampling_options["diffusion_steps"],
@@ -79,7 +78,7 @@ def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output"
         rescale_learned_sigmas=sampling_options["rescale_learned_sigmas"],
         timestep_respacing=timestep_respacing,
     )
-    os.makedirs(os.path.dirname(prefix), exist_ok=True)
+    os.makedirs(prefix, exist_ok=True)
     height, width = shape
     text_emb = bert.encode([text]*batch_size).to(device)
     text_blank = bert.encode(['']*batch_size).to(device)

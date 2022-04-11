@@ -28,9 +28,7 @@ def create_dataloader(
         ds = load_webdataset(distr_backend, resolution=image_size,
                              file_paths=wds_urls, batch_size=batch_size, random_crop=random_crop, random_flip=random_flip)
         dl = wds.WebLoader(ds, batch_size=None, shuffle=False, num_workers=2) # TODO remove param
-        # number_of_batches = dataset_length // (batch_size * distr_backend.get_world_size())
-        number_of_batches = dataset_length // batch_size
-        dl = dl.slice(number_of_batches)
+        number_of_batches = (dataset_length // batch_size // distr_backend.get_world_size())
         dl.length = number_of_batches
         print(f"Loaded webdataset with {number_of_batches} batches on {distr_backend.get_world_size()} gpus")
     else:
@@ -183,10 +181,11 @@ def load_webdataset(
         mycap: clean_caption
     }
     image_mapping = {myimg: pil_transform_to_np}
-    dataset = wds.WebDataset(urls=file_paths, handler=wds.warn_and_continue, nodesplitter=wds.shardlists.split_by_worker, verbose=True)
+    dataset = wds.WebDataset(urls=file_paths, handler=wds.warn_and_continue)
     filtered_dataset = dataset.select(filter_by_item)
+    per_gpu_batch_size = batch_size // distr_backend.get_world_size()
     dataset = filtered_dataset.map_dict(**image_text_mapping).map_dict(**image_mapping).to_tuple(
-        mycap, myimg).batched(batch_size, partial=True)
+        mycap, myimg).batched(per_gpu_batch_size, partial=True)
     return dataset
 
 def parse_data_dir(data_dir):

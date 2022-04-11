@@ -38,13 +38,11 @@ def ldm_encode_data_gn(dataloader, encoder, bert, device, use_fp16):
 
 def train_step(model, diffusion, x_start, device, model_kwargs={}):
     model_kwargs["context"].to(device)
-    timesteps = torch.randint(
-        0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
+    timesteps = torch.randint(0, len(diffusion.betas) - 1, (x_start.shape[0],), device=device)
     scaled_timesteps = diffusion._scale_timesteps(timesteps).to(device)
     noise = torch.randn_like(x_start, device=device)
     x_t = diffusion.q_sample(x_start, timesteps, noise=noise).to(device)
-    epsilon = model(x_t.to(device), scaled_timesteps.to(device),
-                    **model_kwargs).to(device).requires_grad_(True)
+    epsilon = model(x_t.to(device), scaled_timesteps.to(device), **model_kwargs).to(device)
     return torch.nn.functional.mse_loss(epsilon, noise.detach())
 
 
@@ -77,7 +75,6 @@ def main():
     parser.add_argument("--use_fp16", action="store_true")
     parser.add_argument("--local_rank", "-local_rank",
                         type=int, default=0)  # stub for distributed
-    parser.add_argument("--test_prompt", type=str, default="")
     parser.add_argument("--wandb_project", type=str,
                         default="latent-diffusion-deepspeed")
     parser.add_argument("--wandb_entity", type=str, default="")
@@ -160,11 +157,10 @@ def main():
                 print(f"epoch {epoch} step {i} loss {accumulated_loss.item()}")
 
             if i % args.sample_interval == 0 and is_root_rank:
-                current_generations = sample_diffusion(text=args.prompt, bert=bert, ldm=encoder, model=model, batch_size=4,
-                                                       device=device, timestep_respacing="100", ddpm=False, guidance_scale=5.0, shape=(256, 256))
+                current_generations = sample_diffusion(text="", bert=bert, ldm=encoder, model=model, batch_size=4, prefix="finetune-samples", device=device, timestep_respacing="30", ddpm=False, guidance_scale=1.0, shape=(256, 256), save_last=True, wandb_run=wandb_run, images_per_row=4)
                 if wandb_run is not None:
                     wandb_run.log({
-                        "current_generation": wandb.Image(current_generations, caption=args.test_prompt),
+                        "current_generation": wandb.Image(current_generations),
                     })
             if i % args.save_interval == 0:
                 save_model(model=model, path=args.log_dir, is_root=is_root_rank,
