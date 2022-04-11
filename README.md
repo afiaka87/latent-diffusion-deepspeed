@@ -77,4 +77,36 @@ deepspeed --include localhost:0,1,2,3,4,5,6,7 finetune.py \
     --use_fp16 \
     --wandb_project "latent-diffusion-deepspeed" \
     --wandb_entity ""
+``` 
+
+
+### Converting Deepspeed checkpoints back to pytorch
+
+```sh
+# assuming a deepspeed checkpoint directory of `latent-diffusion-ds-cp`
+cd latent-diffusion-ds-cp
+python zero_to_fp32.py . my_checkpoint.pt
+mv my_checkpoint.pt ..
 ```
+
+### Sample from your trained checkpoint
+
+The `--prompt` arg can be either a caption as a string, or a file ending with `.txt` that contains a line separated list of captions.
+
+```sh
+CUDA_VISIBLE_DEVICES=0 python sample.py \
+    --prompt="coco-captions.txt" \
+    --batch_size=16 \
+    --width=256 \
+    --height=256 \
+    --timestep_respacing=200 \
+    --guidance_scale=5.0 \
+    --kl_model="kl-f8.pt" \
+    --bert_model="bert.ckpt" \
+    --ldm_model="my_checkpoint.pt" \
+    --log_dir="output_dir/" \
+    --seed=0 \
+    --use_fp16=True \
+    --wandb_project="ldm-sampling"
+```
+
