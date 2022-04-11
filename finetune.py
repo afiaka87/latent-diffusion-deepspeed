@@ -1,3 +1,4 @@
+import numpy as np
 import argparse
 import random
 import time
@@ -14,6 +15,7 @@ from latent_diffusion_deepspeed.model_util import (load_ldm_bert,
                                                    load_model_and_diffusion,
                                                    sample_diffusion)
 from latent_diffusion_deepspeed.train_util import save_model
+
 
 
 @torch.no_grad()
@@ -158,8 +160,8 @@ def main():
                 print(f"epoch {epoch} step {i} loss {accumulated_loss.item()}")
 
             if i % args.sample_interval == 0 and is_root_rank:
-                current_generations = sample_diffusion(idx=i, text=args.test_prompt, bert=bert, ldm=encoder, model=model, batch_size=1,
-                                                       device=device, timestep_respacing="100", ddpm=False, guidance_scale=4.0, shape=(256, 256))
+                current_generations = sample_diffusion(text=args.prompt, bert=bert, ldm=encoder, model=model, batch_size=4,
+                                                       device=device, timestep_respacing="100", ddpm=False, guidance_scale=5.0, shape=(256, 256))
                 if wandb_run is not None:
                     wandb_run.log({
                         "current_generation": wandb.Image(current_generations, caption=args.test_prompt),
