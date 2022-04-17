@@ -16,3 +16,4 @@ wandb/
 .venv/
 *.txt
 .idea/
+data/
