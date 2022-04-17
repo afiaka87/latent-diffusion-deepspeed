@@ -1,0 +1,7 @@
+wandb/
+__pycache__/
+outputs
+outputs_return/
+tensorboard_logs
+*.txt
+.idea/

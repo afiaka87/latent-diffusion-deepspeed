@@ -14,3 +14,5 @@ tensorboard_logs/
 test.sh
 wandb/
 .venv/
+*.txt
+.idea/
