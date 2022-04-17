@@ -13,3 +13,4 @@ output/
 tensorboard_logs/
 test.sh
 wandb/
+.venv/

@@ -7,6 +7,8 @@ import itertools
 import os
 import torch
 from torchvision.transforms.functional import to_pil_image
+import sys
+sys.path.append("glid-3-xl")
 from encoders.modules import BERTEmbedder
 
 from guided_diffusion.script_util import create_gaussian_diffusion, create_model_and_diffusion, model_and_diffusion_defaults
@@ -85,6 +87,8 @@ def load_model_and_diffusion(model_path, use_fp16=True):
 
 @torch.inference_mode()
 def sample_diffusion(text, bert, ldm, model, clip_model, custom_clip, batch_size, device, prefix="output", timestep_respacing="50", ddpm=False, guidance_scale=10.0, shape=(256, 256), save_last=True, wandb_run=None, images_per_row=8):
+    if len(text) > 128:
+        text = text[:128]
     # from custom_clip import clip
     sampling_options = diffusion_options(False, timestep_respacing)
 
