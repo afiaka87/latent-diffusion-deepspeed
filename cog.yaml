@@ -132,9 +132,9 @@ build:
     - "tokenizers==0.11.6"
     - "toml==0.10.2"
     - "tomli==2.0.1"
-    - "torch==1.10.0"
+    - "torch==1.10.1"
     - "torchmetrics==0.7.3"
-    - "torchvision==0.11.1"
+    - "torchvision==0.11.2"
     - "tornado==6.1"
     - "tqdm==4.64.0"
     - "traitlets==5.1.1"
@@ -155,7 +155,7 @@ build:
     - pip3 install -e 'git+https://github.com/Jack000/glid-3-xl.git@9fe15fe771950daef94eb78b22d805b01eceb15a#egg=guided_diffusion'
     - pip3 install -e 'git+https://github.com/CompVis/latent-diffusion.git@8381e5e557a4d8cc1e878f84f6938930e0eb51b4#egg=latent_diffusion'
     - pip3 install -e 'git+https://github.com/CompVis/taming-transformers.git@24268930bf1dce879235a7fddd0b2355b84d7ea6#egg=taming-transformers'
-    - mkdir -p /root/.cache/clip/ && wget --output-document '/root/.cache/clip/ViT-L-14.pt' 'https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt'
+    - wget --output-document "bert.ckpt" --continue 'https://dall-3.com/models/glid-3-xl/bert.pt'
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
