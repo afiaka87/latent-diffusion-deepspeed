@@ -1,3 +1,4 @@
+import time
 from braceexpand import braceexpand
 import io
 import math
@@ -23,6 +24,8 @@ def create_dataloader(
     use_webdataset=False,
     num_workers=0,
 ):
+    rank = distr_backend.get_rank()
+    num_shards = distr_backend.get_world_size()
     if use_webdataset:
         wds_urls = parse_data_dir(data_dir)
         ds = load_webdataset(distr_backend, resolution=image_size,
@@ -31,13 +34,26 @@ def create_dataloader(
         number_of_batches = (dataset_length // batch_size // distr_backend.get_world_size())
         dl.length = number_of_batches
         print(f"Loaded webdataset with {number_of_batches} batches on {distr_backend.get_world_size()} gpus")
+        return dl
     else:
-        ds = ImageDataset(resolution=image_size, file_paths=data_dir,
-                          random_crop=random_crop, random_flip=random_flip)
-        dl = DataLoader(ds, batch_size=batch_size,
-                        shuffle=True, drop_last=True)
-    while True:
-        yield from dl
+        data_dir = expanduser(data_dir)
+        all_paths = _list_image_files_recursively(data_dir)
+        print(f"Found {len(all_paths)} images in {data_dir}")
+        ds = ImageDataset(
+            image_size,
+            all_paths,
+            classes=None,
+            shard=rank,
+            num_shards=num_shards,
+            random_crop=random_crop,
+            random_flip=random_flip
+        )
+        print(f"Loaded {len(ds)} images on {distr_backend.get_world_size()} gpus")
+        return ds
+        # dl = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True) # required for non-distributed
+        # return dl
+    # while True:
+    #     yield from dl
 
 
 def _list_image_files_recursively(data_dir):
@@ -61,12 +77,16 @@ class ImageDataset(Dataset):
         self,
         resolution,
         file_paths,
+        classes=None,
+        shard=0,
+        num_shards=1,
         random_crop=False,
         random_flip=True,
     ):
         super().__init__()
         self.resolution = resolution
-        self.local_files = file_paths
+        self.local_files = file_paths[shard:][::num_shards]
+        self.local_classes = None if classes is None else classes[shard:][::num_shards]
         self.random_crop = random_crop
         self.random_flip = random_flip
 
@@ -85,19 +105,21 @@ class ImageDataset(Dataset):
         else:
             arr = center_crop_arr(pil_image, self.resolution)
 
-        if self.random_flip and random.random() < 0.5:
-            arr = arr[:, ::-1]
-
-        arr = arr.astype(np.float32) / 127.5 - 1
-
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
 
         with bf.BlobFile(path[1], "r") as f:
-            text = f.read().strip()
+            text = f.read().strip().split("\n")
+            text = random.choice(text)
 
-        return np.transpose(arr, [2, 0, 1]), out_dict, text
+        forbidden_words = ["left", "right", "up", "down"] # dont flip if directional
+        if not any(word in text for word in forbidden_words):
+            if self.random_flip and random.random() < 0.5:
+                arr = arr[:, ::-1]
+
+        arr = arr.astype(np.float32) / 127.5 - 1
+        return text, np.transpose(arr, [2, 0, 1])
 
 
 def center_crop_arr(pil_image, image_size):

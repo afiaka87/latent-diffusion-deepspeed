@@ -1,16 +1,17 @@
 export TOKENIZERS_PARALLELISM=false # required to avoid errors with transformers lib
 # data_dir="data/coco/my_data"
-data_dir="s3://my-s3/path/to/webdataset/{00000..00161}.tar"
-log_dir="my-logs"
-deepspeed --include localhost:0,1,2,3,4,5,6,7 finetune.py \
+# data_dir="s3://my-s3/path/to/webdataset/{00000..00161}.tar"
+data_dir="..."
+log_dir="logs"
+deepspeed --include "localhost:0,1,2,3,4,5,6,7" finetune.py \
     --data_dir $data_dir \
     --log_dir $log_dir \
     --image_size 256 \
-    --batch_size 512 \
+    --batch_size 32 \
     --ga_steps 8 \
     --kl_model 'kl-f8.pt' \
     --bert_path 'bert.ckpt' \
-    --resume_ckpt 'diffusion.pt' \
+    --resume_ckpt 'finetune.pt' \
     --num_epochs 10 \
     --lr 1e-5 \
     --min_lr 1e-6 \
@@ -25,5 +26,4 @@ deepspeed --include localhost:0,1,2,3,4,5,6,7 finetune.py \
     --use_webdataset \
     --deepspeed \
     --use_fp16 \
-    --wandb_project "latent-diffusion-deepspeed" \
-    --wandb_entity ""
+    --wandb_project "latent-diffusion-deepspeed"

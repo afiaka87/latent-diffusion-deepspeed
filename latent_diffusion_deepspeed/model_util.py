@@ -1,3 +1,5 @@
+import blobfile as bf
+import io
 import wandb
 import numpy as np
 import torchvision
@@ -49,25 +51,43 @@ def diffusion_options(use_fp16, timestep_respacing):
         "timestep_respacing": timestep_respacing,
         "use_fp16": use_fp16,
         "use_scale_shift_norm": False,
+        'clip_embed_dim': 768 # TODO: remove this
     })
     return options
 
+def load_state_dict(path, **kwargs):
+    with bf.BlobFile(path, "rb") as f: data = f.read()
+    return torch.load(io.BytesIO(data), **kwargs)
 
 def load_model_and_diffusion(model_path, use_fp16=True):
+    assert os.path.exists(model_path), "model not found, download from https://dall-3.com/models/glid-3-xl/diffusion.pt"
+    resumed_state_dict = load_state_dict(model_path, map_location="cpu")
+    model_state_dict = resumed_state_dict
+    for k in model_state_dict:
+        if k in model_state_dict:
+            if model_state_dict[k].shape != resumed_state_dict[k].shape:
+                print(f"Skip loading parameter: {k}, " f"required shape: {model_state_dict[k].shape}, " f"loaded shape: {resumed_state_dict[k].shape}")
+                model_state_dict[k] = resumed_state_dict[k]
+                if k.endswith('weight'):
+                    kb = k.replace('weight','bias')
+                    model_state_dict[kb] = resumed_state_dict[kb]
+        else:
+            print(f"Dropping parameter {k}")
     options = diffusion_options(use_fp16, timestep_respacing=str(1000))
+    # options.update({ 'clip_embed_dim': 768 }) # TODO add this back
     model, diffusion = create_model_and_diffusion(**options)
-    if len(model_path) > 0:
-        assert os.path.exists(model_path), "model not found, download from https://dall-3.com/models/glid-3-xl/diffusion.pt"
-        model.load_state_dict(torch.load(
-            model_path, map_location="cpu"), strict=False)
+    model.load_state_dict(model_state_dict, strict=False)
     if use_fp16:
         model.convert_to_fp16()
+    del model_state_dict
     return model, diffusion
 
 
 @torch.inference_mode()
-def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output", timestep_respacing="30", ddpm=False, guidance_scale=10.0, shape=(256, 256), save_last=True, wandb_run=None, images_per_row=8):
+def sample_diffusion(text, bert, ldm, model, clip_model, custom_clip, batch_size, device, prefix="output", timestep_respacing="50", ddpm=False, guidance_scale=10.0, shape=(256, 256), save_last=True, wandb_run=None, images_per_row=8):
+    # from custom_clip import clip
     sampling_options = diffusion_options(False, timestep_respacing)
+
     sampling_diffusion = create_gaussian_diffusion(
         steps=sampling_options["diffusion_steps"],
         learn_sigma=sampling_options["learn_sigma"],
@@ -80,9 +100,22 @@ def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output"
     )
     os.makedirs(prefix, exist_ok=True)
     height, width = shape
-    text_emb = bert.encode([text]*batch_size).to(device)
-    text_blank = bert.encode(['']*batch_size).to(device)
-    kwargs = {"context": torch.cat([text_emb, text_blank], dim=0)}
+
+    # bert context
+    text_emb = bert.encode([text]*batch_size).to(device).float()
+    text_blank = bert.encode([""]*batch_size).to(device).float()
+
+    text = custom_clip.tokenize([text]*batch_size, truncate=True).to(device)
+    text_clip_blank = custom_clip.tokenize([""]*batch_size, truncate=True).to(device)
+
+    # custom_clip context
+    text_emb_clip = clip_model.encode_text(text)
+    text_emb_clip_blank = clip_model.encode_text(text_clip_blank)
+
+    kwargs = {
+        "context": torch.cat([text_emb, text_blank], dim=0),
+        "clip_embed": torch.cat([text_emb_clip, text_emb_clip_blank], dim=0).float(),
+    }
     # Create a classifier-free guidance sampling function
 
     def model_fn(x_t, ts, **kwargs):
@@ -128,7 +161,6 @@ def sample_diffusion(text, bert, ldm, model, batch_size, device, prefix="output"
         grid = torchvision.utils.make_grid(batch, nrow=images_per_row)
         if save_last and timestep_idx == final_step:
             torchvision.utils.save_image(grid, output_path)
-            if wandb_run is not None: wandb_run.log({"sample": wandb.Image(output_path, caption=text)})
         else:
             torchvision.utils.save_image(grid, output_path)
     return output_path

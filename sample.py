@@ -84,7 +84,7 @@ def main():
 
         # Sample the diffusion
         with torch.cuda.amp.autocast(enabled=args.use_fp16):
-            output_path = sample_diffusion(text=prompt, bert=bert, ldm=encoder, model=model, batch_size=args.batch_size,
+            output_path = sample_diffusion(text=prompt, bert=bert, ldm=encoder, model=model, clip_model=clip_model, batch_size=args.batch_size,
                                            device=device, prefix=log_dir, timestep_respacing=args.timestep_respacing, ddpm=args.ddpm, guidance_scale=args.guidance_scale, shape=(args.width, args.height), wandb_run=wandb_run, images_per_row=args.images_per_row)
             print(f"Saved to {output_path}")
 

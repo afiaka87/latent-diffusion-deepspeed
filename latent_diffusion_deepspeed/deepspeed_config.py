@@ -4,15 +4,6 @@ def deepspeed_config_from_args(args):
             "stage": 1,
             "round_robin_gradients": True,
         },
-        "scheduler": {
-            "type": "WarmupDecayLR",
-            "params": {
-                "warmup_min_lr": args.min_lr,
-                "warmup_max_lr": args.lr,
-                "warmup_num_steps": args.warmup_steps,
-                "total_num_steps": int(args.max_steps / args.batch_size),
-            }
-        },
         'train_micro_batch_size_per_gpu': args.batch_size,
         'gradient_accumulation_steps': args.ga_steps,
         'gradient_clipping': 1.0,
@@ -32,19 +23,3 @@ def deepspeed_config_from_args(args):
     return deepspeed_config
 
 
-def distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset):
-    training_data = None
-    if not use_webdataset: # esoteric bug in deepspeed
-        training_data = data
-        
-    deepspeed_config = deepspeed_config_from_args(args)
-    (distributed_model, distributed_optimizer, distributed_dataloader, distributed_scheduler) = distr_backend.distribute(
-        args=args,
-        model=model,
-        optimizer=optimizer,
-        model_parameters=[x for x in model.parameters() if x.requires_grad],
-        training_data=training_data,
-        lr_scheduler=None, # TODO: allow for pytorch scheduler
-        config_params=deepspeed_config,
-    )
-    return distributed_model, distributed_optimizer, distributed_dataloader, distributed_scheduler
