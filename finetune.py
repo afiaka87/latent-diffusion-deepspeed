@@ -4,20 +4,21 @@ import random
 import time
 
 import torch
+from torch.utils.data import DataLoader, Dataset
 import wandb
 from dalle_pytorch import distributed_utils
 from crowsonkb.adamw_ema import AdamWEMA
 
+# import sys
+# # sys.path.append("custom_clip")
+from clip_custom import clip
 from latent_diffusion_deepspeed.deepspeed_config import deepspeed_config_from_args
-from latent_diffusion_deepspeed.image_text_datasets import create_dataloader
+from latent_diffusion_deepspeed.image_text_datasets import load_data
 from latent_diffusion_deepspeed.model_util import (load_ldm_bert,
                                                    load_ldm_encoder,
                                                    load_model_and_diffusion,
                                                    sample_diffusion)
 from latent_diffusion_deepspeed.train_util import save_model
-import sys
-sys.path.append("custom_clip")
-from clip_custom import clip
 
 
 def ldm_encode_data_gn(dataloader, encoder, bert, clip_model, device, use_fp16):
@@ -138,7 +139,7 @@ def main():
 
     # Load data
     print(f"Loading data with local rank {args.local_rank}")
-    dataloader = create_dataloader(
+    dataset = load_data(
         distr_backend,
         data_dir,
         args.batch_size,
@@ -160,38 +161,38 @@ def main():
     optimizer = AdamWEMA(model.parameters(
     ), lr=args.lr, weight_decay=args.weight_decay, ema_decay=args.ema_decay, ema_power=1.)
 
-    # Prepare pytorch vs. deepspeed optimizer, dataloader, model
-    # if not args.deepspeed:
-    #     model.train()  # make sure model is in train mode, only for non-deepspeed
-    # else:
-    #     model, optimizer, distr_data, _ = distributed_setup(
-    #         model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
-    # if not args.use_webdataset:
     print(f"Distributing model with local rank {args.local_rank}")
-    # model, optimizer, distr_data, _ = distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset=args.use_webdataset)
-    # def distributed_setup(model, optimizer, data, distr_backend, args, use_webdataset):
-    # training_data = None
-    # if not use_webdataset: # esoteric bug in deepspeed
-    # TODO
-    # training_data = data
-        
-    deepspeed_config = deepspeed_config_from_args(args)
-    (model, optimizer, distributed_dataloader, _) = distr_backend.distribute(
-        args=args,
-        model=model,
-        optimizer=optimizer,
-        model_parameters=[x for x in model.parameters() if x.requires_grad],
-        training_data=dataloader,
-        lr_scheduler=None, # TODO: allow for pytorch scheduler
-        config_params=deepspeed_config,
-    )
-    # return distributed_model, distributed_optimizer, distributed_dataloader, distributed_scheduler
-    # data = distr_data  # returns None if using torch Dataset, deepspeed thing
+    # Prepare pytorch vs. deepspeed optimizer, dataloader, model
+    dataloader = None
+    if args.deepspeed:
+        deepspeed_config = deepspeed_config_from_args(args)
+
+        (model, optimizer, dataloader, _) = distr_backend.distribute(
+            args=args,
+            model=model,
+            optimizer=optimizer,
+            model_parameters=[x for x in model.parameters() if x.requires_grad],
+            training_data=None if args.use_webdataset else dataset,
+            lr_scheduler=None, # TODO: allow for pytorch scheduler
+            config_params=deepspeed_config,
+        )
+        # dataloader = DataLoader(dataset, batch_size=args.batch_size, drop_last=True) # required for non-distributed
+        # wds_urls = braceexpand("pipe:aws s3 cp s3://laion-watermark/clear/{00000..00160}.tar -")
+        # number_of_batches = (dataset_length // batch_size // distr_backend.get_world_size())
+        # dl.length = number_of_batches
+        # print(f"Loaded webdataset with {number_of_batches} batches on {distr_backend.get_world_size()} gpus")
+    else:
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True) # required for non-distributed
+    if args.use_webdataset:
+        import webdataset as wds
+        dataloader = wds.WebLoader(dataset, batch_size=None, shuffle=False, num_workers=2) # TODO remove param
+
+
     print(f"Starting training with local rank {args.local_rank}")
     # Train loop
     for epoch in range(args.num_epochs):
         print(f"Starting epoch {epoch} with local rank {args.local_rank}")
-        data = ldm_encode_data_gn(distributed_dataloader, encoder, bert, clip_model, device, args.use_fp16)
+        data = ldm_encode_data_gn(dataloader, encoder, bert, clip_model, device, args.use_fp16)
 
         for i, (x_start, model_kwargs) in enumerate(data):
             with torch.cuda.amp.autocast(enabled=args.use_fp16):

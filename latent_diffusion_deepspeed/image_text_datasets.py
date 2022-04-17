@@ -1,19 +1,19 @@
-import time
-from braceexpand import braceexpand
 import io
 import math
-from posixpath import expanduser
 import random
+import time
 from pathlib import Path
+from posixpath import expanduser
 
 import blobfile as bf
 import numpy as np
 import webdataset as wds
+from braceexpand import braceexpand
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
 
-def create_dataloader(
+def load_data(
     distr_backend,
     data_dir,
     batch_size,
@@ -28,13 +28,10 @@ def create_dataloader(
     num_shards = distr_backend.get_world_size()
     if use_webdataset:
         wds_urls = parse_data_dir(data_dir)
+        print(f"wds_urls: {wds_urls}")
         ds = load_webdataset(distr_backend, resolution=image_size,
                              file_paths=wds_urls, batch_size=batch_size, random_crop=random_crop, random_flip=random_flip)
-        dl = wds.WebLoader(ds, batch_size=None, shuffle=False, num_workers=2) # TODO remove param
-        number_of_batches = (dataset_length // batch_size // distr_backend.get_world_size())
-        dl.length = number_of_batches
-        print(f"Loaded webdataset with {number_of_batches} batches on {distr_backend.get_world_size()} gpus")
-        return dl
+        return ds
     else:
         data_dir = expanduser(data_dir)
         all_paths = _list_image_files_recursively(data_dir)
@@ -50,10 +47,6 @@ def create_dataloader(
         )
         print(f"Loaded {len(ds)} images on {distr_backend.get_world_size()} gpus")
         return ds
-        # dl = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True) # required for non-distributed
-        # return dl
-    # while True:
-    #     yield from dl
 
 
 def _list_image_files_recursively(data_dir):
@@ -199,15 +192,13 @@ def load_webdataset(
 
     myimg, mycap = "jpg", "txt"
     image_text_mapping = {
-        myimg: bytes_to_pil_image,
-        mycap: clean_caption
+        mycap: clean_caption,
+        myimg: bytes_to_pil_image
     }
     image_mapping = {myimg: pil_transform_to_np}
-    dataset = wds.WebDataset(urls=file_paths, handler=wds.warn_and_continue)
+    dataset = wds.WebDataset(urls=file_paths, handler=wds.warn_and_continue, nodesplitter=wds.split_by_worker)
     filtered_dataset = dataset.select(filter_by_item)
-    per_gpu_batch_size = batch_size // distr_backend.get_world_size()
-    dataset = filtered_dataset.map_dict(**image_text_mapping).map_dict(**image_mapping).to_tuple(
-        mycap, myimg).batched(per_gpu_batch_size, partial=True)
+    dataset = filtered_dataset.map_dict(**image_text_mapping).map_dict(**image_mapping).to_tuple(mycap, myimg).batched(batch_size, partial=True)
     return dataset
 
 def parse_data_dir(data_dir):
