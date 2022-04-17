@@ -115,7 +115,7 @@ def main():
     
     # from clip_custom import clip # make clip end up on the right device
 
-    print(f"Loading CLIP with local rank {args.local_rank}")
+    print(f"Loading CLIP.")
     clip_model, _ = clip.load('ViT-L/14', device=device, jit=False)
     clip_model.eval().requires_grad_(False)
 
@@ -123,7 +123,7 @@ def main():
 
     # Load backbone models
     # requires a device bc bug in latent-diffusion
-    print(f"Loading bert with local rank {args.local_rank}")
+    print(f"Loading bert.")
     bert = load_ldm_bert(device=device, bert_path=args.bert_path,
                          requires_grad=False)
     print(f"Loading LDM first stage encoder with local rank {args.local_rank}")
