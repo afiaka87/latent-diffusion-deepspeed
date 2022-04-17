@@ -91,7 +91,7 @@ def main():
                         type=int, default=0)  # stub for distributed
     parser.add_argument("--wandb_project", type=str,
                         default="latent-diffusion-deepspeed")
-    parser.add_argument("--wandb_entity", type=str, default="")
+    parser.add_argument("--wandb_entity", type=str, default=None)
 
     args = parser.parse_args()
 
